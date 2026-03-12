@@ -1,0 +1,14 @@
+langchain>=0.3.0
+langchain-groq>=0.2.0
+langchain-huggingface>=1.2.1
+langchain-community>=0.3.0
+langchain-chroma>=0.1.4
+sentence-transformers>=3.0.1
+pypdf>=5.1.0
+docx2txt>=0.8
+duckduckgo-search>=6.0.0
+pytubefix>=8.1.0
+youtube-transcript-api>=0.6.3
+fpdf2>=2.8.7
+python-dotenv>=1.0.1
+streamlit>=1.40.0
