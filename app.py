@@ -17,7 +17,6 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_classic.chains import create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
-from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 
 # --- PAGE CONFIG ---
