@@ -5,125 +5,143 @@ sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import streamlit as st
 import os
 import tempfile
+import base64
+from groq import Groq
 
-# 2026 Compatible Modular Imports
+# LangChain & AI Imports
 from langchain_groq import ChatGroq
-from langchain_community.document_loaders import PyPDFLoader, UnstructuredExcelLoader, UnstructuredImageLoader
+from langchain_community.document_loaders import PyPDFLoader, UnstructuredExcelLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
-
-# MODERN IMPORTS FROM LANGCHAIN-CLASSIC
 from langchain_classic.chains import create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 
-# --- PAGE SETUP ---
-st.set_page_config(page_title="Multi-Format RAG Assistant", page_icon="📁", layout="wide")
-st.title("📁 Document AI Assistant (PDF, Excel, Images)")
+# --- PAGE CONFIG ---
+st.set_page_config(page_title="AI Multi-Tool", page_icon="🤖", layout="wide")
+st.title("🤖 RAG & Vision Assistant")
+st.markdown("---")
 
-# --- ACCESS SECRETS ---
+# Retrieve API Key from Secrets
 groq_api_key = st.secrets.get("GROQ_API_KEY")
-
 if not groq_api_key:
-    st.error("Please add your GROQ_API_KEY to Streamlit Secrets!")
+    st.error("Please add GROQ_API_KEY to your Streamlit Secrets.")
     st.stop()
 
-# --- INITIALIZE EMBEDDINGS ---
+# Initialize Groq Client for Vision
+client = Groq(api_key=groq_api_key)
+
+# --- HELPER FUNCTIONS ---
+
 @st.cache_resource
-def load_embeddings():
+def get_embeddings():
+    """Loads the embedding model once and caches it."""
     return HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
-# --- FILE PROCESSING ROUTER ---
-def process_file(uploaded_file):
-    file_extension = os.path.splitext(uploaded_file.name)[1].lower()
-    
-    # Save file to a safe temporary location
-    with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp:
+def describe_image(image_bytes):
+    """Uses Llama 3.2 Vision to describe images without Tesseract."""
+    base64_image = base64.b64encode(image_bytes).decode('utf-8')
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.2-11b-vision-preview",
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Please describe this image in detail and extract any visible text."},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                ]
+            }]
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"Vision Error: {str(e)}"
+
+def process_document(uploaded_file):
+    """Handles PDF and Excel processing for RAG."""
+    ext = os.path.splitext(uploaded_file.name)[1].lower()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
         tmp.write(uploaded_file.getvalue())
         tmp_path = tmp.name
 
     try:
-        # Route to appropriate loader based on extension
-        if file_extension == ".pdf":
+        if ext == ".pdf":
             loader = PyPDFLoader(tmp_path)
-        elif file_extension in [".xlsx", ".xls"]:
-            loader = UnstructuredExcelLoader(tmp_path, mode="elements")
-        elif file_extension in [".png", ".jpg", ".jpeg"]:
-            loader = UnstructuredImageLoader(tmp_path)
         else:
-            raise ValueError(f"Unsupported file format: {file_extension}")
-
+            loader = UnstructuredExcelLoader(tmp_path)
+            
         docs = loader.load()
+        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        chunks = splitter.split_documents(docs)
         
-        # Split text into bite-sized chunks for the LLM
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-        chunks = text_splitter.split_documents(docs)
-
-        # Store in Vector Database (RAM)
         vector_store = Chroma.from_documents(
             documents=chunks, 
-            embedding=load_embeddings()
+            embedding=get_embeddings(),
+            collection_name="user_data"
         )
         return vector_store.as_retriever()
-
     finally:
-        # Clean up temp file immediately after reading
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
 
-# --- SIDEBAR & FILE UPLOAD ---
+# --- SIDEBAR UI ---
 with st.sidebar:
-    st.header("File Upload Center")
+    st.header("📤 Upload Files")
     uploaded_file = st.file_uploader(
-        "Upload your document", 
-        type=["pdf", "xlsx", "xls", "png", "jpg", "jpeg"]
+        "Upload Image, PDF, or Excel", 
+        type=["pdf", "xlsx", "xls", "jpg", "png", "jpeg"]
     )
     
-    if st.button("Analyze Document") and uploaded_file:
-        with st.spinner("Reading and indexing the file... This might take a moment for images/Excel..."):
-            try:
-                st.session_state.retriever = process_file(uploaded_file)
-                st.success("Analysis Complete! Start chatting.")
-            except Exception as e:
-                st.error(f"Processing Error: {e}")
+    if st.button("Submit & Process") and uploaded_file:
+        file_ext = os.path.splitext(uploaded_file.name)[1].lower()
+        
+        if file_ext in [".jpg", ".png", ".jpeg"]:
+            with st.spinner("AI is analyzing the image..."):
+                desc = describe_image(uploaded_file.getvalue())
+                st.session_state.image_context = desc
+                st.success("Image analyzed!")
+        else:
+            with st.spinner("Indexing document..."):
+                st.session_state.retriever = process_document(uploaded_file)
+                st.success("Document ready!")
 
-# --- CHAT INTERFACE ---
+# --- MAIN CHAT INTERFACE ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Display conversation history
+# Display previous image description if available
+if "image_context" in st.session_state:
+    with st.expander("🖼️ Last Image Analysis", expanded=True):
+        st.write(st.session_state.image_context)
+
+# Chat History Display
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# User prompt
-if prompt := st.chat_input("Ask a question about your uploaded file..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
+# User Input
+if user_input := st.chat_input("Ask a question..."):
+    st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
-        st.markdown(prompt)
+        st.markdown(user_input)
 
-    if "retriever" in st.session_state:
-        with st.chat_message("assistant"):
-            try:
-                llm = ChatGroq(
-                    groq_api_key=groq_api_key, 
-                    model_name="llama3-8b-8192",
-                    temperature=0.2
-                )
-                
-                qa_chain = RetrievalQA.from_chain_type(
-                    llm=llm,
-                    chain_type="stuff",
-                    retriever=st.session_state.retriever
-                )
-                
-                response = qa_chain.invoke(prompt)
-                answer = response["result"]
-                
-                st.markdown(answer)
-                st.session_state.messages.append({"role": "assistant", "content": answer})
-            except Exception as e:
-                st.error(f"Error with Groq API: {e}")
-    else:
-        st.info("👈 Please upload and 'Analyze' a file using the sidebar first.")
+    with st.chat_message("assistant"):
+        try:
+            llm = ChatGroq(api_key=groq_api_key, model_name="llama3-8b-8192")
+            
+            # Context logic
+            context = ""
+            if "retriever" in st.session_state:
+                # Get relevant snippets from RAG
+                rel_docs = st.session_state.retriever.get_relevant_documents(user_input)
+                context = "\n".join([doc.page_content for doc in rel_docs])
+            
+            # Combine with Image info if user asks
+            full_prompt = f"Context: {context}\n\nImage Info: {st.session_state.get('image_context', '')}\n\nQuestion: {user_input}"
+            
+            response = llm.invoke(full_prompt)
+            st.markdown(response.content)
+            st.session_state.messages.append({"role": "assistant", "content": response.content})
+            
+        except Exception as e:
+            st.error(f"Chat Error: {e}")
