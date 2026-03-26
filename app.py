@@ -2,16 +2,14 @@ import streamlit as st
 import os
 import tempfile
 
-# 2026 Compatible Imports
+# 2026 Modern Modular Imports
 from langchain_groq import ChatGroq
 from langchain_community.document_loaders import PyPDFLoader, UnstructuredExcelLoader, UnstructuredImageLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
-
-# THESE ARE THE CRITICAL CHANGES FOR 2026
-from langchain_classic.chains import create_retrieval_chain
-from langchain_classic.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains import create_retrieval_chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 
 # --- PAGE SETUP ---
