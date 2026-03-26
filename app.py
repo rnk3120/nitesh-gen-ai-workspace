@@ -127,7 +127,7 @@ if user_input := st.chat_input("Ask a question..."):
 
     with st.chat_message("assistant"):
         try:
-            llm = ChatGroq(api_key=groq_api_key, model_name="llama3-8b-8192")
+            llm = ChatGroq(api_key=groq_api_key, model_name="llama-3.3-70b-versatile")
             
             # Context logic
             context = ""
