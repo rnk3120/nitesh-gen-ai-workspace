@@ -2,15 +2,15 @@ import streamlit as st
 import os
 import tempfile
 
-# LangChain Imports (2026 standards)
+# 2026 Modern Modular Imports
 from langchain_groq import ChatGroq
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_community.document_loaders.excel import UnstructuredExcelLoader
-from langchain_community.document_loaders.image import UnstructuredImageLoader
+from langchain_community.document_loaders import PyPDFLoader, UnstructuredExcelLoader, UnstructuredImageLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain.chains import RetrievalQA
+from langchain.chains import create_retrieval_chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_core.prompts import ChatPromptTemplate
 
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Multi-Format RAG Assistant", page_icon="📁", layout="wide")
