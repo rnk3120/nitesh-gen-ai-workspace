@@ -1,134 +1,104 @@
-import os
-import base64
-import shutil
-import pandas as pd
 import streamlit as st
+import os
+import tempfile
 from langchain_groq import ChatGroq
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_chroma import Chroma
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_core.messages import HumanMessage
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain.chains import RetrievalQA
 
-# --- 1. INITIAL CONFIG ---
-st.set_page_config(page_title="Universal AI Studio 2026", layout="wide", page_icon="⚡")
+# --- PAGE SETUP ---
+st.set_page_config(page_title="Groq RAG Assistant", page_icon="📄", layout="wide")
+st.title("📄 High-Speed PDF Chat (Groq + RAG)")
 
-# Verify API Key
-if "GROQ_API_KEY" not in st.secrets:
-    st.error("Please add your GROQ_API_KEY to the Streamlit Secrets dashboard.")
+# --- ACCESS SECRETS ---
+# Note: Set 'GROQ_API_KEY' in Streamlit Cloud -> Settings -> Secrets
+groq_api_key = st.secrets.get("GROQ_API_KEY")
+
+if not groq_api_key:
+    st.error("Please add your GROQ_API_KEY to Streamlit Secrets!")
     st.stop()
 
-gen_api_key = st.secrets["GROQ_API_KEY"]
-
-# Initialize Session State
-for key in ["chat_history", "df", "retriever", "active_mode", "img_b64"]:
-    if key not in st.session_state:
-        st.session_state[key] = [] if "history" in key else None
-
-# --- 2. THE ENGINES ---
+# --- INITIALIZE EMBEDDINGS ---
 @st.cache_resource
-def get_embeddings():
-    # Downloads once and keeps in memory for speed
+def load_embeddings():
+    # Downloads a small model once and caches it to save memory
     return HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
-def process_pdf(file_path):
-    """Wipes old DB and creates a fresh one for the new PDF"""
-    if os.path.exists("./chroma_db"): 
-        shutil.rmtree("./chroma_db")
-    
-    loader = PyPDFLoader(file_path)
-    data = loader.load()
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-    chunks = splitter.split_documents(data)
-    
-    # Create in-memory vector database
-    vector_db = Chroma.from_documents(
-        documents=chunks, 
-        embedding=get_embeddings()
-    )
-    return vector_db.as_retriever(search_kwargs={"k": 3})
+# --- PDF PROCESSING LOGIC ---
+def process_pdf(uploaded_file):
+    # 1. Create a safe temporary file path
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(uploaded_file.getvalue())
+        tmp_path = tmp.name
 
-# --- 3. SIDEBAR (Uploader & Reset) ---
+    try:
+        # 2. Load and Split PDF
+        loader = PyPDFLoader(tmp_path)
+        docs = loader.load()
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        chunks = text_splitter.split_documents(docs)
+
+        # 3. Create Vector Store in RAM
+        vector_store = Chroma.from_documents(
+            documents=chunks, 
+            embedding=load_embeddings()
+        )
+        return vector_store.as_retriever()
+    
+    finally:
+        # 4. Cleanup the temp file
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+# --- SIDEBAR & FILE UPLOAD ---
 with st.sidebar:
-    st.title("📂 File Center")
-    uploaded_file = st.file_uploader("Upload PDF, Image, or CSV", type=["pdf", "csv", "png", "jpg", "jpeg"])
+    st.header("Configuration")
+    uploaded_file = st.file_uploader("Upload your PDF document", type="pdf")
     
-    if uploaded_file:
-        ext = uploaded_file.name.split('.')[-1].lower()
-        
-        if ext in ['png', 'jpg', 'jpeg']:
-            st.session_state.active_mode = "IMAGE"
-            st.session_state.img_b64 = base64.b64encode(uploaded_file.getvalue()).decode("utf-8")
-            st.success("Image uploaded!")
-            
-        elif ext == 'pdf':
-            st.session_state.active_mode = "PDF"
-            with open("temp.pdf", "wb") as f:
-                f.write(uploaded_file.getbuffer())
-            st.session_state.retriever = process_pdf("temp.pdf")
-            st.success("PDF processed!")
-            
-        elif ext == 'csv':
-            st.session_state.active_mode = "CSV"
-            st.session_state.df = pd.read_csv(uploaded_file)
-            st.success("CSV loaded!")
+    if st.button("Process Document") and uploaded_file:
+        with st.spinner("Analyzing PDF..."):
+            st.session_state.retriever = process_pdf(uploaded_file)
+            st.success("Analysis Complete!")
 
-    st.divider()
-    if st.button("🗑️ Clear Everything"):
-        if os.path.exists("./chroma_db"): shutil.rmtree("./chroma_db")
-        st.session_state.clear()
-        st.rerun()
+# --- CHAT INTERFACE ---
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-# --- 4. CHAT AREA ---
-st.title("🤖 Intelligent Assistant")
+# Display chat history
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-# Display previous messages
-for m in st.session_state.chat_history:
-    with st.chat_message(m["role"]):
-        st.markdown(m["content"])
-
-if prompt := st.chat_input("Ask me about the file or anything else..."):
-    st.session_state.chat_history.append({"role": "user", "content": prompt})
+# User Input
+if prompt := st.chat_input("Ask a question about the PDF..."):
+    st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    with st.chat_message("assistant"):
-        # We use Llama 3.3 for the main brain
-        llm_main = ChatGroq(api_key=gen_api_key, model="llama-3.3-70b-versatile", temperature=0.3)
-        
-        # 🟢 LOGIC: Is this a General question or a File question?
-        # A quick check to ensure we don't hallucinate context
-        intent_check = llm_main.invoke(
-            f"If the question is general (like coding help, greetings, or web dev) answer 'GENERAL'. "
-            f"If it asks for data from a file, answer 'FILE'. Question: {prompt}"
-        ).content.upper()
-
-        # 🟢 ROUTING
-        if "GENERAL" in intent_check or st.session_state.active_mode is None:
-            # Route: General Brain
-            response = llm_main.invoke(prompt).content
-        
-        elif st.session_state.active_mode == "IMAGE":
-            # Route: Vision Engine (Llama 4 Scout)
-            v_llm = ChatGroq(api_key=gen_api_key, model="meta-llama/llama-4-scout-17b-16e-instruct")
-            msg = HumanMessage(content=[
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{st.session_state.img_b64}"}}
-            ])
-            response = v_llm.invoke([msg]).content
-
-        elif st.session_state.active_mode == "PDF":
-            # Route: Document Search (RAG)
-            context = ""
-            if st.session_state.retriever:
-                docs = st.session_state.retriever.invoke(prompt)
-                context = "\n".join([d.page_content for d in docs])
-            
-            strict_prompt = f"Using ONLY this PDF context:\n{context}\n\nQuestion: {prompt}"
-            response = llm_main.invoke(strict_prompt).content
-            
-        else:
-            response = "I'm ready! Please upload a file to begin specific analysis."
-
-        st.markdown(response)
-        st.session_state.chat_history.append({"role": "assistant", "content": response})
+    # Generate Response
+    if "retriever" in st.session_state:
+        with st.chat_message("assistant"):
+            try:
+                llm = ChatGroq(
+                    groq_api_key=groq_api_key, 
+                    model_name="llama3-8b-8192",
+                    temperature=0.2
+                )
+                
+                qa_chain = RetrievalQA.from_chain_type(
+                    llm=llm,
+                    chain_type="stuff",
+                    retriever=st.session_state.retriever
+                )
+                
+                response = qa_chain.invoke(prompt)
+                answer = response["result"]
+                
+                st.markdown(answer)
+                st.session_state.messages.append({"role": "assistant", "content": answer})
+            except Exception as e:
+                st.error(f"Error with Groq API: {e}")
+    else:
+        st.info("👈 Please upload and 'Process' a PDF to start chatting.")
