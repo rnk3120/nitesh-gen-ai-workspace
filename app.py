@@ -133,7 +133,7 @@ if user_input := st.chat_input("Ask a question..."):
             context = ""
             if "retriever" in st.session_state:
                 # Get relevant snippets from RAG
-                rel_docs = st.session_state.retriever.get_relevant_documents(user_input)
+                rel_docs = st.session_state.retriever.invoke(user_input)
                 context = "\n".join([doc.page_content for doc in rel_docs])
             
             # Combine with Image info if user asks
