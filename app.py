@@ -1,19 +1,22 @@
 import streamlit as st
 import os
 import tempfile
+
+# LangChain Imports (2026 standards)
 from langchain_groq import ChatGroq
 from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import Chroma
+from langchain_community.document_loaders.excel import UnstructuredExcelLoader
+from langchain_community.document_loaders.image import UnstructuredImageLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.chains import RetrievalQA
 
 # --- PAGE SETUP ---
-st.set_page_config(page_title="Groq RAG Assistant", page_icon="📄", layout="wide")
-st.title("📄 High-Speed PDF Chat (Groq + RAG)")
+st.set_page_config(page_title="Multi-Format RAG Assistant", page_icon="📁", layout="wide")
+st.title("📁 Document AI Assistant (PDF, Excel, Images)")
 
 # --- ACCESS SECRETS ---
-# Note: Set 'GROQ_API_KEY' in Streamlit Cloud -> Settings -> Secrets
 groq_api_key = st.secrets.get("GROQ_API_KEY")
 
 if not groq_api_key:
@@ -23,61 +26,77 @@ if not groq_api_key:
 # --- INITIALIZE EMBEDDINGS ---
 @st.cache_resource
 def load_embeddings():
-    # Downloads a small model once and caches it to save memory
     return HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
-# --- PDF PROCESSING LOGIC ---
-def process_pdf(uploaded_file):
-    # 1. Create a safe temporary file path
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+# --- FILE PROCESSING ROUTER ---
+def process_file(uploaded_file):
+    file_extension = os.path.splitext(uploaded_file.name)[1].lower()
+    
+    # Save file to a safe temporary location
+    with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp:
         tmp.write(uploaded_file.getvalue())
         tmp_path = tmp.name
 
     try:
-        # 2. Load and Split PDF
-        loader = PyPDFLoader(tmp_path)
+        # Route to appropriate loader based on extension
+        if file_extension == ".pdf":
+            loader = PyPDFLoader(tmp_path)
+        elif file_extension in [".xlsx", ".xls"]:
+            loader = UnstructuredExcelLoader(tmp_path, mode="elements")
+        elif file_extension in [".png", ".jpg", ".jpeg"]:
+            loader = UnstructuredImageLoader(tmp_path)
+        else:
+            raise ValueError(f"Unsupported file format: {file_extension}")
+
         docs = loader.load()
+        
+        # Split text into bite-sized chunks for the LLM
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
         chunks = text_splitter.split_documents(docs)
 
-        # 3. Create Vector Store in RAM
+        # Store in Vector Database (RAM)
         vector_store = Chroma.from_documents(
             documents=chunks, 
             embedding=load_embeddings()
         )
         return vector_store.as_retriever()
-    
+
     finally:
-        # 4. Cleanup the temp file
+        # Clean up temp file immediately after reading
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
 
 # --- SIDEBAR & FILE UPLOAD ---
 with st.sidebar:
-    st.header("Configuration")
-    uploaded_file = st.file_uploader("Upload your PDF document", type="pdf")
+    st.header("File Upload Center")
+    uploaded_file = st.file_uploader(
+        "Upload your document", 
+        type=["pdf", "xlsx", "xls", "png", "jpg", "jpeg"]
+    )
     
-    if st.button("Process Document") and uploaded_file:
-        with st.spinner("Analyzing PDF..."):
-            st.session_state.retriever = process_pdf(uploaded_file)
-            st.success("Analysis Complete!")
+    if st.button("Analyze Document") and uploaded_file:
+        with st.spinner("Reading and indexing the file... This might take a moment for images/Excel..."):
+            try:
+                st.session_state.retriever = process_file(uploaded_file)
+                st.success("Analysis Complete! Start chatting.")
+            except Exception as e:
+                st.error(f"Processing Error: {e}")
 
 # --- CHAT INTERFACE ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Display chat history
+# Display conversation history
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# User Input
-if prompt := st.chat_input("Ask a question about the PDF..."):
+# User prompt
+if prompt := st.chat_input("Ask a question about your uploaded file..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Generate Response
     if "retriever" in st.session_state:
         with st.chat_message("assistant"):
             try:
@@ -101,4 +120,4 @@ if prompt := st.chat_input("Ask a question about the PDF..."):
             except Exception as e:
                 st.error(f"Error with Groq API: {e}")
     else:
-        st.info("👈 Please upload and 'Process' a PDF to start chatting.")
+        st.info("👈 Please upload and 'Analyze' a file using the sidebar first.")
