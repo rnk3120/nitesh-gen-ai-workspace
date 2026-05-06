@@ -20,8 +20,8 @@ A professional-grade Retrieval-Augmented Generation (RAG) application built in 2
 
 ### 1. Clone the repository
 ```bash
-git clone [https://github.com/yourusername/your-repo-name.git](https://github.com/yourusername/your-repo-name.git)
-cd your-repo-name
+git clone https://github.com/rnk3120/nitesh-gen-ai-workspace.git
+cd nitesh-gen-ai-workspace
 
 
 # Windows
